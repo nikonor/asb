@@ -8,7 +8,8 @@ import (
 
 type Repo interface {
 	IsUserExists(ctx context.Context, userId int64) (string, error)
-	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, error)
+	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error)
+	SaveMessageLink(userId int64, messageID int)
 }
 
 type Service struct {
@@ -24,6 +25,10 @@ func (s *Service) IsUserExists(ctx context.Context, userId int64) (string, error
 	return s.repo.IsUserExists(ctx, userId)
 }
 
-func (s *Service) ValidateNewUser(ctx context.Context, userId int64, data string) (bool, error) {
+func (s *Service) ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error) {
 	return s.repo.ValidateNewUser(ctx, userId, data)
+}
+
+func (s *Service) SaveMessageLink(userId int64, messageID int) {
+	s.repo.SaveMessageLink(userId, messageID)
 }

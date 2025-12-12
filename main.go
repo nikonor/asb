@@ -48,25 +48,61 @@ func main() {
 	c := controller.New(logger, s)
 
 	updates := bot.GetUpdatesChan(u)
+	ch := make(chan tgbotapi.Update, 1_000_000)
+
+	for range 3 {
+		go worker(ctx, logger, c, bot, ch)
+	}
 
 	// TODO: переделать на воркеров
 	for update := range updates {
-		go func(update tgbotapi.Update) {
-			newCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			defer cancel()
+		ch <- update
+	}
+}
 
-			needSend, msg, err := c.Message(newCtx, update)
-			if err != nil {
-				logger.Warn(ctx, err)
-				return
-			}
+func worker(ctx context.Context, logger log.Logger, c *controller.Controller, bot *tgbotapi.BotAPI, ch chan tgbotapi.Update) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-ch:
+			func(update tgbotapi.Update) {
+				newCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
 
-			if needSend {
-				_, err = bot.Send(msg)
+				needSend, msg, idForDel, err := c.Message(newCtx, update)
 				if err != nil {
 					logger.Warn(ctx, err)
+					return
 				}
-			}
-		}(update)
+
+				if needSend {
+					resp, err := bot.Send(msg)
+					if err != nil {
+						logger.Warn(ctx, err)
+						return
+					}
+					if msg.ReplyMarkup != nil {
+						c.SaveMessageLink(update, resp)
+					}
+				}
+
+				if idForDel != 0 {
+					delMsg := tgbotapi.NewDeleteMessage(getChatId(update), idForDel)
+					_, _ = bot.Send(delMsg)
+				}
+
+			}(update)
+		}
 	}
+}
+
+func getChatId(update tgbotapi.Update) int64 {
+	if update.Message != nil {
+		return update.Message.Chat.ID
+	}
+	if update.CallbackQuery != nil {
+		return update.CallbackQuery.Message.Chat.ID
+	}
+	return 0
 }

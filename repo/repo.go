@@ -15,12 +15,17 @@ import (
 	"github.com/txix-open/isp-kit/log"
 )
 
+type Memo struct {
+	Token     string
+	MessageId int
+}
+
 type Repo struct {
 	logger   log.Logger
 	locker   sync.Mutex
 	file     string
 	users    map[int64]struct{}
-	tmpUsers map[int64]string
+	tmpUsers map[int64]Memo
 }
 
 func New(ctx context.Context, logger log.Logger) (*Repo, error) {
@@ -33,12 +38,12 @@ func New(ctx context.Context, logger log.Logger) (*Repo, error) {
 		file:     "./data/users.lst",
 		logger:   logger,
 		users:    m,
-		tmpUsers: make(map[int64]string),
+		tmpUsers: make(map[int64]Memo),
 	}, nil
 
 }
 
-func (r *Repo) IsUserExists(_ context.Context, userId int64) (string, error) {
+func (r *Repo) IsUserExists(ctx context.Context, userId int64) (string, error) {
 	r.locker.Lock()
 	defer r.locker.Unlock()
 
@@ -52,18 +57,18 @@ func (r *Repo) IsUserExists(_ context.Context, userId int64) (string, error) {
 		return domain.Exist, nil
 	}
 
-	r.tmpUsers[userId] = uuid.NewString()
+	r.tmpUsers[userId] = Memo{Token: uuid.NewString()}
 
-	return r.tmpUsers[userId], nil
+	return r.tmpUsers[userId].Token, nil
 }
 
-func (r *Repo) ValidateNewUser(ctx context.Context, userId int64, data string) (bool, error) {
+func (r *Repo) ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error) {
 	r.locker.Lock()
 	defer r.locker.Unlock()
 
 	u, ok := r.tmpUsers[userId]
-	if !ok || (ok && u != data) {
-		return false, nil
+	if !ok || (ok && u.Token != data) {
+		return false, 0, nil
 	}
 
 	if err := r.addUserToFileUnsafe(userId); err != nil {
@@ -72,7 +77,19 @@ func (r *Repo) ValidateNewUser(ctx context.Context, userId int64, data string) (
 	delete(r.tmpUsers, userId)
 	r.users[userId] = struct{}{}
 
-	return true, nil
+	return true, u.MessageId, nil
+}
+
+func (r *Repo) SaveMessageLink(userId int64, messageID int) {
+	r.locker.Lock()
+	defer r.locker.Unlock()
+
+	obj, ok := r.tmpUsers[userId]
+	if !ok {
+		return
+	}
+	obj.MessageId = messageID
+	r.tmpUsers[userId] = obj
 }
 
 func initCache(logger log.Logger, path string) (map[int64]struct{}, error) {

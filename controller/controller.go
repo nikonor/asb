@@ -11,24 +11,26 @@ import (
 
 type Service interface {
 	IsUserExists(ctx context.Context, userId int64) (string, error)
-	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, error)
+	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error)
+	SaveMessageLink(userId int64, messageID int)
 }
 
 type Controller struct {
 	logger log.Logger
 	srv    Service
+	// TODO: очередь на удаление сообщений (храним id + время удаления. ФП каждую секунду до места в очереди, где время больше текущего)
 }
 
 func New(logger log.Logger, srv Service) *Controller {
 	return &Controller{logger: logger, srv: srv}
 }
 
-func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tgbotapi.MessageConfig, error) {
+func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tgbotapi.MessageConfig, int, error) {
 	if msg.Message != nil {
 		exist, err := c.srv.IsUserExists(ctx, msg.Message.From.ID)
 		switch {
 		case err != nil:
-			return false, tgbotapi.MessageConfig{}, err
+			return false, tgbotapi.MessageConfig{}, 0, err
 		case exist != domain.Exist:
 			out := c.newMsg(msg.Message.Chat.ID,
 				fmt.Sprintf("%s, %s!",
@@ -37,21 +39,24 @@ func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tg
 				msg.Message.MessageID)
 			out = c.addButton(out, exist)
 
-			return true, out, nil
+			return true, out, 0, nil
 		}
 	}
 
 	// а если это нажатие на кнопку?
 	if msg.CallbackQuery != nil {
-		ok, _ := c.srv.ValidateNewUser(ctx, msg.CallbackQuery.From.ID, msg.CallbackQuery.Data)
+		ok, qMessageId, _ := c.srv.ValidateNewUser(ctx, msg.CallbackQuery.From.ID, msg.CallbackQuery.Data)
 		if ok {
+
 			// TODO: welcome to cfg
 			return true,
-				c.newMsg(msg.CallbackQuery.Message.Chat.ID, "welcome", msg.CallbackQuery.Message.MessageID), nil
+				c.newMsg(msg.CallbackQuery.Message.Chat.ID, fmt.Sprintf("%s, %s!",
+					msg.CallbackQuery.From.FirstName+" "+msg.CallbackQuery.From.LastName, "welcome"), 0),
+				qMessageId, nil
 		}
 	}
 
-	return false, tgbotapi.MessageConfig{}, nil
+	return false, tgbotapi.MessageConfig{}, 0, nil
 }
 
 func (c *Controller) newMsg(chatId int64, txt string, replTo int) tgbotapi.MessageConfig {
@@ -70,4 +75,8 @@ func (c *Controller) addButton(out tgbotapi.MessageConfig, key string) tgbotapi.
 		),
 	)
 	return out
+}
+
+func (c *Controller) SaveMessageLink(update tgbotapi.Update, resp tgbotapi.Message) {
+	c.srv.SaveMessageLink(update.Message.From.ID, resp.MessageID)
 }
