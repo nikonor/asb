@@ -1,3 +1,4 @@
 /vendor/
 /.ignore_go_hooks
 /.idea/
+/data/users.lst

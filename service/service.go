@@ -1,17 +1,29 @@
 package service
 
+import (
+	"context"
+
+	"github.com/txix-open/isp-kit/log"
+)
+
 type Repo interface {
-	IsExistUser(from int64) (bool, error)
+	IsUserExists(ctx context.Context, userId int64) (string, error)
+	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, error)
 }
 
 type Service struct {
-	repo Repo
+	logger log.Logger
+	repo   Repo
 }
 
-func New(repo Repo) *Service {
-	return &Service{repo: repo}
+func New(logger log.Logger, repo Repo) *Service {
+	return &Service{logger: logger, repo: repo}
 }
 
-func (s *Service) IsExistUser(from int64) (bool, error) {
-	return s.repo.IsExistUser(from)
+func (s *Service) IsUserExists(ctx context.Context, userId int64) (string, error) {
+	return s.repo.IsUserExists(ctx, userId)
+}
+
+func (s *Service) ValidateNewUser(ctx context.Context, userId int64, data string) (bool, error) {
+	return s.repo.ValidateNewUser(ctx, userId, data)
 }
