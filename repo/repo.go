@@ -32,23 +32,25 @@ type TaskForDelete struct {
 type Repo struct {
 	logger         log.Logger
 	locker         sync.Mutex
-	file           string
+	path           string
 	users          map[int64]struct{}
+	blacklist      map[int64]struct{}
 	tmpUsers       map[int64]Memo
 	queryForDelete []TaskForDelete
 	senderChan     chan domain.SendObject
 }
 
 func New(ctx context.Context, logger log.Logger, senderChan chan domain.SendObject) (*Repo, error) {
-	m, err := initRepo(logger, "./data/users.lst") // TODO: file to cfg
+	m, b, err := initRepo(logger, "./data") // TODO: path to cfg
 	if err != nil {
 		return nil, err
 	}
 	logger.Debug(ctx, "init cache:"+fmt.Sprintf("%v", m))
 	r := Repo{
-		file:           "./data/users.lst",
+		path:           "./data",
 		logger:         logger,
 		users:          m,
+		blacklist:      b,
 		tmpUsers:       make(map[int64]Memo),
 		queryForDelete: make([]TaskForDelete, 0),
 		senderChan:     senderChan,
@@ -71,7 +73,7 @@ func (r *Repo) IsUserExists(ctx context.Context, userId int64) (string, error) {
 	}
 
 	if _, ok := r.tmpUsers[userId]; ok {
-		return domain.Exist, nil
+		return domain.TmpUser, nil
 	}
 
 	r.tmpUsers[userId] = Memo{Token: uuid.NewString()}
@@ -89,12 +91,12 @@ func (r *Repo) ValidateNewUser(ctx context.Context, userId int64, data string) (
 	}
 
 	if err := r.addUserToFileUnsafe(userId); err != nil {
-		r.logger.Warn(ctx, "error on write to file::"+err.Error())
+		r.logger.Warn(ctx, "error on write to path::"+err.Error())
 	}
 	delete(r.tmpUsers, userId)
 	r.users[userId] = struct{}{}
 	if err := os.Remove("./data/tmp/" + strconv.FormatInt(userId, 10)); err != nil {
-		r.logger.Warn(ctx, "error on delete to file::"+err.Error())
+		r.logger.Warn(ctx, "error on delete to path::"+err.Error())
 	}
 
 	return true, u.BotMessageId, nil
@@ -115,12 +117,12 @@ func (r *Repo) SaveMessageLink(userId int64, messageID int) {
 func (r *Repo) SaveToQuery(ctx context.Context, chatId int64, userId int64, messageId int) error {
 	fh, err := os.OpenFile("./data/tmp/"+strconv.FormatInt(userId, 10), os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
-		return errors.WithMessage(err, "open file")
+		return errors.WithMessage(err, "open path")
 	}
 	defer func() { _ = fh.Close() }()
 
 	if _, err = fh.WriteString(strconv.Itoa(messageId)); err != nil {
-		return errors.WithMessage(err, "write to file")
+		return errors.WithMessage(err, "write to path")
 	}
 
 	r.locker.Lock()
@@ -129,16 +131,16 @@ func (r *Repo) SaveToQuery(ctx context.Context, chatId int64, userId int64, mess
 		ChatId:    chatId,
 		UserId:    userId,
 		MessageId: messageId,
-		TS:        time.Now().Add(5 * time.Second), // TODO: cfg
+		TS:        time.Now().Add(15 * time.Second), // TODO: cfg
 	})
 
 	return nil
 }
 
-func initRepo(logger log.Logger, path string) (map[int64]struct{}, error) {
-	fh, err := os.Open(path)
+func initRepo(logger log.Logger, path string) (map[int64]struct{}, map[int64]struct{}, error) {
+	fh, err := os.OpenFile(path+"/users.lst", os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		return nil, err
+		return nil, nil, errors.WithMessage(err, "open user.lst")
 	}
 	defer func() { _ = fh.Close() }()
 
@@ -151,12 +153,32 @@ func initRepo(logger log.Logger, path string) (map[int64]struct{}, error) {
 		logger.Debug(context.Background(), "line: ["+line+"]")
 		userId, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
 		if err != nil {
-			return nil, err
+			return nil, nil, errors.WithMessage(err, "parse user.lst")
 		}
 		m[userId] = struct{}{}
 	}
 
-	return m, nil
+	fh2, err := os.OpenFile(path+"/black.lst", os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, nil, errors.WithMessage(err, "open black.lst")
+	}
+	defer func() { _ = fh2.Close() }()
+
+	b := make(map[int64]struct{})
+
+	scanner = bufio.NewScanner(fh2)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		logger.Debug(context.Background(), "line: ["+line+"]")
+		userId, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
+		if err != nil {
+			return nil, nil, errors.WithMessage(err, "parse black.lst")
+		}
+		b[userId] = struct{}{}
+	}
+
+	return m, b, nil
 }
 
 func (r *Repo) bg(ctx context.Context) {
@@ -172,9 +194,9 @@ func (r *Repo) bg(ctx context.Context) {
 }
 
 func (r *Repo) addUserToFileUnsafe(userId int64) error {
-	fh, err := os.OpenFile(r.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	fh, err := os.OpenFile(r.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return errors.WithMessage(err, "open file")
+		return errors.WithMessage(err, "open path")
 	}
 	defer func() { _ = fh.Close() }()
 

@@ -1,6 +1,7 @@
 package domain
 
 const (
-	Exist    = "exist"
-	NotExist = "not_exist"
+	Exist   = "exist"
+	Baned   = "baned"
+	TmpUser = "tmp_user"
 )

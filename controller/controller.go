@@ -33,6 +33,8 @@ func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tg
 		switch {
 		case err != nil:
 			return false, tgbotapi.MessageConfig{}, 0, err
+		case exist == domain.Baned || exist == domain.TmpUser:
+			return false, tgbotapi.MessageConfig{}, msg.Message.MessageID, nil
 		case exist != domain.Exist:
 			// TODO: что делать с повторым сообщением?
 			if err = c.srv.SaveToQuery(ctx, msg.Message.Chat.ID, msg.Message.From.ID, msg.Message.MessageID); err != nil {
