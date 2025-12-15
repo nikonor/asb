@@ -13,7 +13,7 @@ type Service interface {
 	IsUserExists(ctx context.Context, userId int64) (string, error)
 	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error)
 	SaveMessageLink(userId int64, messageID int)
-	SaveToQuery(ctx context.Context, userId int64, messageId int) error
+	SaveToQuery(ctx context.Context, chatId int64, userId int64, messageId int) error
 }
 
 type Controller struct {
@@ -34,7 +34,8 @@ func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tg
 		case err != nil:
 			return false, tgbotapi.MessageConfig{}, 0, err
 		case exist != domain.Exist:
-			if err = c.srv.SaveToQuery(ctx, msg.Message.From.ID, msg.Message.MessageID); err != nil {
+			// TODO: что делать с повторым сообщением?
+			if err = c.srv.SaveToQuery(ctx, msg.Message.Chat.ID, msg.Message.From.ID, msg.Message.MessageID); err != nil {
 				c.logger.Warn(ctx, "error SaveToQuery::"+err.Error())
 			}
 			out := c.newMsg(msg.Message.Chat.ID,

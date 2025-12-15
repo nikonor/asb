@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nikonor/asb/domain"
 	"github.com/txix-open/isp-kit/log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -13,12 +14,6 @@ import (
 	"github.com/nikonor/asb/repo"
 	"github.com/nikonor/asb/service"
 )
-
-type SendObject struct {
-	Msg      tgbotapi.Chattable
-	NeedSave bool
-	Update   tgbotapi.Update
-}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,9 +44,9 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 	receiverCh := make(chan tgbotapi.Update, 1_000_000)
-	senderCh := make(chan SendObject, 1_000_000)
+	senderCh := make(chan domain.SendObject, 1_000_000)
 
-	r, err := repo.New(ctx, logger)
+	r, err := repo.New(ctx, logger, senderCh)
 	if err != nil {
 		logger.Fatal(ctx, err)
 	}
@@ -72,7 +67,7 @@ func main() {
 	}
 }
 
-func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, c *controller.Controller, senderChan <-chan SendObject) {
+func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, c *controller.Controller, senderChan <-chan domain.SendObject) {
 	logger.Debug(ctx, "sender worker start")
 	for {
 		select {
@@ -85,6 +80,7 @@ func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, 
 			resp, err := bot.Send(msg.Msg)
 			if err != nil {
 				logger.Warn(ctx, "error on send message::"+err.Error())
+				// TODO: тут какая-то проблема при отравке delete
 			}
 			if msg.NeedSave {
 				c.SaveMessageLink(msg.Update, resp)
@@ -94,7 +90,7 @@ func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, 
 }
 
 func receiverWorker(ctx context.Context, logger log.Logger, c *controller.Controller,
-	receiverChan chan tgbotapi.Update, senderChan chan SendObject) {
+	receiverChan chan tgbotapi.Update, senderChan chan domain.SendObject) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -111,7 +107,7 @@ func receiverWorker(ctx context.Context, logger log.Logger, c *controller.Contro
 				}
 
 				if needSend {
-					s := SendObject{Msg: msg, Update: update}
+					s := domain.SendObject{Msg: msg, Update: update}
 					if msg.ReplyMarkup != nil {
 						s.NeedSave = true
 					}
@@ -120,7 +116,7 @@ func receiverWorker(ctx context.Context, logger log.Logger, c *controller.Contro
 				}
 
 				if idForDel != 0 {
-					senderChan <- SendObject{Msg: tgbotapi.NewDeleteMessage(getChatId(update), idForDel)}
+					senderChan <- domain.SendObject{Msg: tgbotapi.NewDeleteMessage(getChatId(update), idForDel)}
 				}
 
 			}(update)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
 	"github.com/nikonor/asb/domain"
 	"github.com/pkg/errors"
@@ -22,6 +23,7 @@ type Memo struct {
 }
 
 type TaskForDelete struct {
+	ChatId    int64
 	UserId    int64
 	MessageId int
 	TS        time.Time
@@ -34,19 +36,22 @@ type Repo struct {
 	users          map[int64]struct{}
 	tmpUsers       map[int64]Memo
 	queryForDelete []TaskForDelete
+	senderChan     chan domain.SendObject
 }
 
-func New(ctx context.Context, logger log.Logger) (*Repo, error) {
+func New(ctx context.Context, logger log.Logger, senderChan chan domain.SendObject) (*Repo, error) {
 	m, err := initRepo(logger, "./data/users.lst") // TODO: file to cfg
 	if err != nil {
 		return nil, err
 	}
 	logger.Debug(ctx, "init cache:"+fmt.Sprintf("%v", m))
 	r := Repo{
-		file:     "./data/users.lst",
-		logger:   logger,
-		users:    m,
-		tmpUsers: make(map[int64]Memo),
+		file:           "./data/users.lst",
+		logger:         logger,
+		users:          m,
+		tmpUsers:       make(map[int64]Memo),
+		queryForDelete: make([]TaskForDelete, 0),
+		senderChan:     senderChan,
 	}
 
 	go r.bg(ctx)
@@ -107,7 +112,7 @@ func (r *Repo) SaveMessageLink(userId int64, messageID int) {
 	r.tmpUsers[userId] = obj
 }
 
-func (r *Repo) SaveToQuery(ctx context.Context, userId int64, messageId int) error {
+func (r *Repo) SaveToQuery(ctx context.Context, chatId int64, userId int64, messageId int) error {
 	fh, err := os.OpenFile("./data/tmp/"+strconv.FormatInt(userId, 10), os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return errors.WithMessage(err, "open file")
@@ -121,6 +126,7 @@ func (r *Repo) SaveToQuery(ctx context.Context, userId int64, messageId int) err
 	r.locker.Lock()
 	defer r.locker.Unlock()
 	r.queryForDelete = append(r.queryForDelete, TaskForDelete{
+		ChatId:    chatId,
 		UserId:    userId,
 		MessageId: messageId,
 		TS:        time.Now().Add(5 * time.Second), // TODO: cfg
@@ -180,7 +186,6 @@ func (r *Repo) addUserToFileUnsafe(userId int64) error {
 }
 
 func (r *Repo) checkQuery(ctx context.Context) {
-	// r.logger.Debug(ctx, "checkQuery::begin::"+strconv.Itoa(len(r.queryForDelete)))
 	r.locker.Lock()
 	defer r.locker.Unlock()
 	now := time.Now()
@@ -194,9 +199,19 @@ func (r *Repo) checkQuery(ctx context.Context) {
 		if task.TS.After(now) {
 			break
 		}
+		r.senderChan <- domain.SendObject{Msg: tgbotapi.DeleteMessageConfig{
+			ChatID:    task.ChatId,
+			MessageID: task.MessageId,
+		}}
+		r.senderChan <- domain.SendObject{Msg: tgbotapi.DeleteMessageConfig{
+			ChatID:    task.ChatId,
+			MessageID: r.tmpUsers[task.UserId].BotMessageId,
+		}}
+
+		// TODO: бан юзера
+
+		delete(r.tmpUsers, task.UserId)
+
 		r.queryForDelete = r.queryForDelete[1:]
-
 	}
-
-	// r.logger.Debug(ctx, "checkQuery::end::"+strconv.Itoa(len(r.queryForDelete)))
 }

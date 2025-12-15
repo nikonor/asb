@@ -10,7 +10,7 @@ type Repo interface {
 	IsUserExists(ctx context.Context, userId int64) (string, error)
 	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error)
 	SaveMessageLink(userId int64, messageID int)
-	SaveToQuery(ctx context.Context, userId int64, messageId int) error
+	SaveToQuery(ctx context.Context, chatId int64, userId int64, messageId int) error
 }
 
 type Service struct {
@@ -34,6 +34,6 @@ func (s *Service) SaveMessageLink(userId int64, messageID int) {
 	s.repo.SaveMessageLink(userId, messageID)
 }
 
-func (s *Service) SaveToQuery(ctx context.Context, userId int64, messageId int) error {
-	return s.repo.SaveToQuery(ctx, userId, messageId)
+func (s *Service) SaveToQuery(ctx context.Context, chatId int64, userId int64, messageId int) error {
+	return s.repo.SaveToQuery(ctx, chatId, userId, messageId)
 }
