@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 	"github.com/nikonor/asb/repo"
 	"github.com/nikonor/asb/service"
 )
+
+type SendObject struct {
+	Msg      tgbotapi.Chattable
+	NeedSave bool
+	Update   tgbotapi.Update
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -40,6 +47,10 @@ func main() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
+	updates := bot.GetUpdatesChan(u)
+	receiverCh := make(chan tgbotapi.Update, 1_000_000)
+	senderCh := make(chan SendObject, 1_000_000)
+
 	r, err := repo.New(ctx, logger)
 	if err != nil {
 		logger.Fatal(ctx, err)
@@ -47,25 +58,48 @@ func main() {
 	s := service.New(logger, r)
 	c := controller.New(logger, s)
 
-	updates := bot.GetUpdatesChan(u)
-	ch := make(chan tgbotapi.Update, 1_000_000)
+	for range 3 { // TODO: cfg
+		go receiverWorker(ctx, logger, c, receiverCh, senderCh)
+	}
 
-	for range 3 {
-		go worker(ctx, logger, c, bot, ch)
+	for range 3 { // TODO: cfg
+		go senderWorker(ctx, logger, bot, c, senderCh)
 	}
 
 	// TODO: переделать на воркеров
 	for update := range updates {
-		ch <- update
+		receiverCh <- update
 	}
 }
 
-func worker(ctx context.Context, logger log.Logger, c *controller.Controller, bot *tgbotapi.BotAPI, ch chan tgbotapi.Update) {
+func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, c *controller.Controller, senderChan <-chan SendObject) {
+	logger.Debug(ctx, "sender worker start")
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Debug(ctx, "Sender worker done")
+			return
+		case msg := <-senderChan:
+			logger.Debug(ctx, "Sender worker got message")
+			// TODO: перепосылка
+			resp, err := bot.Send(msg.Msg)
+			if err != nil {
+				logger.Warn(ctx, "error on send message::"+err.Error())
+			}
+			if msg.NeedSave {
+				c.SaveMessageLink(msg.Update, resp)
+			}
+		}
+	}
+}
+
+func receiverWorker(ctx context.Context, logger log.Logger, c *controller.Controller,
+	receiverChan chan tgbotapi.Update, senderChan chan SendObject) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case update := <-ch:
+		case update := <-receiverChan:
 			func(update tgbotapi.Update) {
 				newCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				defer cancel()
@@ -77,19 +111,16 @@ func worker(ctx context.Context, logger log.Logger, c *controller.Controller, bo
 				}
 
 				if needSend {
-					resp, err := bot.Send(msg)
-					if err != nil {
-						logger.Warn(ctx, err)
-						return
-					}
+					s := SendObject{Msg: msg, Update: update}
 					if msg.ReplyMarkup != nil {
-						c.SaveMessageLink(update, resp)
+						s.NeedSave = true
 					}
+					logger.Debug(ctx, "send to senderChan", log.String("s", fmt.Sprintf("%v", s)))
+					senderChan <- s
 				}
 
 				if idForDel != 0 {
-					delMsg := tgbotapi.NewDeleteMessage(getChatId(update), idForDel)
-					_, _ = bot.Send(delMsg)
+					senderChan <- SendObject{Msg: tgbotapi.NewDeleteMessage(getChatId(update), idForDel)}
 				}
 
 			}(update)

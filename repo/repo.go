@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nikonor/asb/domain"
@@ -16,30 +17,41 @@ import (
 )
 
 type Memo struct {
-	Token     string
+	Token        string
+	BotMessageId int
+}
+
+type TaskForDelete struct {
+	UserId    int64
 	MessageId int
+	TS        time.Time
 }
 
 type Repo struct {
-	logger   log.Logger
-	locker   sync.Mutex
-	file     string
-	users    map[int64]struct{}
-	tmpUsers map[int64]Memo
+	logger         log.Logger
+	locker         sync.Mutex
+	file           string
+	users          map[int64]struct{}
+	tmpUsers       map[int64]Memo
+	queryForDelete []TaskForDelete
 }
 
 func New(ctx context.Context, logger log.Logger) (*Repo, error) {
-	m, err := initCache(logger, "./data/users.lst") // TODO: file to cfg
+	m, err := initRepo(logger, "./data/users.lst") // TODO: file to cfg
 	if err != nil {
 		return nil, err
 	}
 	logger.Debug(ctx, "init cache:"+fmt.Sprintf("%v", m))
-	return &Repo{
+	r := Repo{
 		file:     "./data/users.lst",
 		logger:   logger,
 		users:    m,
 		tmpUsers: make(map[int64]Memo),
-	}, nil
+	}
+
+	go r.bg(ctx)
+
+	return &r, nil
 
 }
 
@@ -76,8 +88,11 @@ func (r *Repo) ValidateNewUser(ctx context.Context, userId int64, data string) (
 	}
 	delete(r.tmpUsers, userId)
 	r.users[userId] = struct{}{}
+	if err := os.Remove("./data/tmp/" + strconv.FormatInt(userId, 10)); err != nil {
+		r.logger.Warn(ctx, "error on delete to file::"+err.Error())
+	}
 
-	return true, u.MessageId, nil
+	return true, u.BotMessageId, nil
 }
 
 func (r *Repo) SaveMessageLink(userId int64, messageID int) {
@@ -88,16 +103,39 @@ func (r *Repo) SaveMessageLink(userId int64, messageID int) {
 	if !ok {
 		return
 	}
-	obj.MessageId = messageID
+	obj.BotMessageId = messageID
 	r.tmpUsers[userId] = obj
 }
 
-func initCache(logger log.Logger, path string) (map[int64]struct{}, error) {
+func (r *Repo) SaveToQuery(ctx context.Context, userId int64, messageId int) error {
+	fh, err := os.OpenFile("./data/tmp/"+strconv.FormatInt(userId, 10), os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return errors.WithMessage(err, "open file")
+	}
+	defer func() { _ = fh.Close() }()
+
+	if _, err = fh.WriteString(strconv.Itoa(messageId)); err != nil {
+		return errors.WithMessage(err, "write to file")
+	}
+
+	r.locker.Lock()
+	defer r.locker.Unlock()
+	r.queryForDelete = append(r.queryForDelete, TaskForDelete{
+		UserId:    userId,
+		MessageId: messageId,
+		TS:        time.Now().Add(5 * time.Second), // TODO: cfg
+	})
+
+	return nil
+}
+
+func initRepo(logger log.Logger, path string) (map[int64]struct{}, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
+
 	m := make(map[int64]struct{})
 
 	scanner := bufio.NewScanner(fh)
@@ -115,19 +153,50 @@ func initCache(logger log.Logger, path string) (map[int64]struct{}, error) {
 	return m, nil
 }
 
+func (r *Repo) bg(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			r.logger.Debug(ctx, "context done")
+			return
+		case <-time.After(time.Second):
+			r.checkQuery(ctx)
+		}
+	}
+}
+
 func (r *Repo) addUserToFileUnsafe(userId int64) error {
 	fh, err := os.OpenFile(r.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return errors.WithMessage(err, "open file")
 	}
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
-	// if _, err = fh.Seek(0, 2); err != nil {
-	// 	return errors.WithMessage(err, "seek")
-	// }
 	if _, err = fh.WriteString(fmt.Sprintf("%d\n", userId)); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func (r *Repo) checkQuery(ctx context.Context) {
+	// r.logger.Debug(ctx, "checkQuery::begin::"+strconv.Itoa(len(r.queryForDelete)))
+	r.locker.Lock()
+	defer r.locker.Unlock()
+	now := time.Now()
+
+	var (
+		task TaskForDelete
+	)
+
+	for _, task = range r.queryForDelete {
+		r.logger.Debug(ctx, fmt.Sprintf("%s", task.TS.String()))
+		if task.TS.After(now) {
+			break
+		}
+		r.queryForDelete = r.queryForDelete[1:]
+
+	}
+
+	// r.logger.Debug(ctx, "checkQuery::end::"+strconv.Itoa(len(r.queryForDelete)))
 }

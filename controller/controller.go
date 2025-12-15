@@ -13,12 +13,14 @@ type Service interface {
 	IsUserExists(ctx context.Context, userId int64) (string, error)
 	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error)
 	SaveMessageLink(userId int64, messageID int)
+	SaveToQuery(ctx context.Context, userId int64, messageId int) error
 }
 
 type Controller struct {
 	logger log.Logger
 	srv    Service
 	// TODO: очередь на удаление сообщений (храним id + время удаления. ФП каждую секунду до места в очереди, где время больше текущего)
+	//		плюс она же должна удалять первое сообщение от бота
 }
 
 func New(logger log.Logger, srv Service) *Controller {
@@ -32,6 +34,9 @@ func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tg
 		case err != nil:
 			return false, tgbotapi.MessageConfig{}, 0, err
 		case exist != domain.Exist:
+			if err = c.srv.SaveToQuery(ctx, msg.Message.From.ID, msg.Message.MessageID); err != nil {
+				c.logger.Warn(ctx, "error SaveToQuery::"+err.Error())
+			}
 			out := c.newMsg(msg.Message.Chat.ID,
 				fmt.Sprintf("%s, %s!",
 					msg.Message.From.FirstName+" "+msg.Message.From.LastName,
