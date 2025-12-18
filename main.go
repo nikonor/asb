@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
@@ -75,14 +76,26 @@ func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, 
 			return
 		case msg := <-senderChan:
 			logger.Debug(ctx, "Sender worker got message")
-			// TODO: перепосылка
-			resp, err := bot.Send(msg.Msg)
-			if err != nil {
-				logger.Warn(ctx, "error on send message::"+err.Error())
-				// TODO: тут какая-то проблема при отравке delete
-			}
-			if msg.NeedSave {
-				c.SaveMessageLink(msg.Update, resp)
+
+			var (
+				err  = errors.New("loop")
+				resp tgbotapi.Message
+			)
+
+			for err != nil {
+				resp, err = bot.Send(msg.Msg)
+				if err != nil {
+					logger.Warn(ctx, "error on send message::"+err.Error())
+					select {
+					case <-time.After(time.Second):
+						continue
+					case <-ctx.Done():
+						return
+					}
+				}
+				if msg.NeedSave {
+					c.SaveMessageLink(msg.Update, resp)
+				}
 			}
 		}
 	}
