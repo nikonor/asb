@@ -4,7 +4,7 @@ import (
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-type SendObject struct {
+type SendingObject struct {
 	Msg      tgbotapi.Chattable
 	NeedSave bool
 	Update   tgbotapi.Update

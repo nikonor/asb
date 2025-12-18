@@ -10,10 +10,10 @@ import (
 )
 
 type Service interface {
-	IsUserExists(ctx context.Context, userId int64) (string, error)
-	ValidateNewUser(ctx context.Context, userId int64, data string) (bool, int, error)
+	GetUserStatus(ctx context.Context, userId int64) string
+	HandleCallback(ctx context.Context, userId int64, data string) int
 	SaveMessageLink(userId int64, messageID int)
-	SaveToQuery(ctx context.Context, chatId int64, userId int64, messageId int) error
+	SaveToPending(ctx context.Context, chatId int64, userId int64, messageId int) error
 }
 
 type Controller struct {
@@ -27,47 +27,19 @@ func New(logger log.Logger, srv Service) *Controller {
 	return &Controller{logger: logger, srv: srv}
 }
 
-func (c *Controller) Message(ctx context.Context, msg tgbotapi.Update) (bool, tgbotapi.MessageConfig, int, error) {
-	if msg.Message != nil {
-		exist, err := c.srv.IsUserExists(ctx, msg.Message.From.ID)
-		switch {
-		case err != nil:
-			return false, tgbotapi.MessageConfig{}, 0, err
-		case exist == domain.Baned || exist == domain.TmpUser:
-			return false, tgbotapi.MessageConfig{}, msg.Message.MessageID, nil
-		case exist != domain.Exist:
-			// TODO: что делать с повторым сообщением?
-			if err = c.srv.SaveToQuery(ctx, msg.Message.Chat.ID, msg.Message.From.ID, msg.Message.MessageID); err != nil {
-				c.logger.Warn(ctx, "error SaveToQuery::"+err.Error())
-			}
-			out := c.newMsg(msg.Message.Chat.ID,
-				fmt.Sprintf("%s, %s!",
-					msg.Message.From.FirstName+" "+msg.Message.From.LastName,
-					"это ваше первое сообщение, подтвердите, что вы не бот"),
-				msg.Message.MessageID)
-			out = c.addButton(out, exist)
-
-			return true, out, 0, nil
-		}
-	}
-
-	// а если это нажатие на кнопку?
-	if msg.CallbackQuery != nil {
-		ok, qMessageId, _ := c.srv.ValidateNewUser(ctx, msg.CallbackQuery.From.ID, msg.CallbackQuery.Data)
-		if ok {
-
-			// TODO: welcome to cfg
-			return true,
-				c.newMsg(msg.CallbackQuery.Message.Chat.ID, fmt.Sprintf("%s, %s!",
-					msg.CallbackQuery.From.FirstName+" "+msg.CallbackQuery.From.LastName, "welcome"), 0),
-				qMessageId, nil
-		}
+func (c *Controller) HandleMessage(ctx context.Context, msg tgbotapi.Update) (bool, tgbotapi.MessageConfig, int, error) {
+	switch {
+	case msg.Message != nil:
+		return c.handleMessage(ctx, msg)
+	case msg.CallbackQuery != nil:
+		return c.handleCallbackQuery(ctx, msg)
+		// TODO: остальные типы сообщений
 	}
 
 	return false, tgbotapi.MessageConfig{}, 0, nil
 }
 
-func (c *Controller) newMsg(chatId int64, txt string, replTo int) tgbotapi.MessageConfig {
+func newMsg(chatId int64, txt string, replTo int) tgbotapi.MessageConfig {
 	out := tgbotapi.NewMessage(chatId, txt)
 	if replTo != 0 {
 		out.ReplyToMessageID = replTo
@@ -87,4 +59,41 @@ func (c *Controller) addButton(out tgbotapi.MessageConfig, key string) tgbotapi.
 
 func (c *Controller) SaveMessageLink(update tgbotapi.Update, resp tgbotapi.Message) {
 	c.srv.SaveMessageLink(update.Message.From.ID, resp.MessageID)
+}
+
+// needSend, msg, idForDel, err
+func (c *Controller) handleMessage(ctx context.Context, msg tgbotapi.Update) (bool, tgbotapi.MessageConfig, int, error) {
+	exist := c.srv.GetUserStatus(ctx, msg.Message.From.ID)
+	switch {
+	case exist == domain.Baned || exist == domain.TmpUser:
+		return false, tgbotapi.MessageConfig{}, msg.Message.MessageID, nil
+	case exist != domain.Exist:
+		if err := c.srv.SaveToPending(ctx, msg.Message.Chat.ID, msg.Message.From.ID,
+			msg.Message.MessageID); err != nil {
+			c.logger.Warn(ctx, "error SaveToQuery::"+err.Error())
+		}
+		out := newMsg(msg.Message.Chat.ID,
+			fmt.Sprintf("%s, %s!",
+				msg.Message.From.FirstName+" "+msg.Message.From.LastName,
+				"это ваше первое сообщение, подтвердите, что вы не бот"), // TODO: cfg
+			msg.Message.MessageID)
+		out = c.addButton(out, exist)
+
+		return true, out, 0, nil
+	default:
+		return false, tgbotapi.MessageConfig{}, 0, nil
+	}
+}
+
+// needSend, msg, idForDel, err
+func (c *Controller) handleCallbackQuery(ctx context.Context, msg tgbotapi.Update) (bool,
+	tgbotapi.MessageConfig, int, error) {
+	qMessageId := c.srv.HandleCallback(ctx, msg.CallbackQuery.From.ID, msg.CallbackQuery.Data)
+	if qMessageId != 0 {
+		return true,
+			newMsg(msg.CallbackQuery.Message.Chat.ID, fmt.Sprintf("%s, %s!",
+				msg.CallbackQuery.From.FirstName+" "+msg.CallbackQuery.From.LastName, "welcome"), 0),
+			qMessageId, nil
+	}
+	return false, tgbotapi.MessageConfig{}, 0, nil
 }

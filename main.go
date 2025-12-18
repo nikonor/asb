@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -34,7 +33,7 @@ func main() {
 	}
 	// TODO: webhook
 
-	bot.Debug = true
+	bot.Debug = false
 
 	logger.Debug(ctx, "Authorized on account "+bot.Self.UserName)
 
@@ -44,7 +43,7 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 	receiverCh := make(chan tgbotapi.Update, 1_000_000)
-	senderCh := make(chan domain.SendObject, 1_000_000)
+	senderCh := make(chan domain.SendingObject, 1_000_000)
 
 	r, err := repo.New(ctx, logger, senderCh)
 	if err != nil {
@@ -67,7 +66,7 @@ func main() {
 	}
 }
 
-func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, c *controller.Controller, senderChan <-chan domain.SendObject) {
+func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, c *controller.Controller, senderChan <-chan domain.SendingObject) {
 	logger.Debug(ctx, "sender worker start")
 	for {
 		select {
@@ -90,7 +89,7 @@ func senderWorker(ctx context.Context, logger log.Logger, bot *tgbotapi.BotAPI, 
 }
 
 func receiverWorker(ctx context.Context, logger log.Logger, c *controller.Controller,
-	receiverChan chan tgbotapi.Update, senderChan chan domain.SendObject) {
+	receiverChan chan tgbotapi.Update, senderChan chan domain.SendingObject) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -100,23 +99,22 @@ func receiverWorker(ctx context.Context, logger log.Logger, c *controller.Contro
 				newCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				defer cancel()
 
-				needSend, msg, idForDel, err := c.Message(newCtx, update)
+				needSend, msg, idForDel, err := c.HandleMessage(newCtx, update)
 				if err != nil {
 					logger.Warn(ctx, err)
 					return
 				}
 
 				if needSend {
-					s := domain.SendObject{Msg: msg, Update: update}
+					s := domain.SendingObject{Msg: msg, Update: update}
 					if msg.ReplyMarkup != nil {
 						s.NeedSave = true
 					}
-					logger.Debug(ctx, "send to senderChan", log.String("s", fmt.Sprintf("%v", s)))
 					senderChan <- s
 				}
 
 				if idForDel != 0 {
-					senderChan <- domain.SendObject{Msg: tgbotapi.NewDeleteMessage(getChatId(update), idForDel)}
+					senderChan <- domain.SendingObject{Msg: tgbotapi.NewDeleteMessage(getChatId(update), idForDel)}
 				}
 
 			}(update)
