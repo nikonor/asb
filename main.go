@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nikonor/asb/conf"
 	"github.com/nikonor/asb/domain"
 	"github.com/txix-open/isp-kit/log"
 
@@ -16,6 +17,12 @@ import (
 )
 
 func main() {
+
+	cfg, err := conf.ReadConfig("./conf/conf.json")
+	if err != nil {
+		panic(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -23,9 +30,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	token, ok := os.LookupEnv("TLG_TOKEN")
+	token, ok := os.LookupEnv("ASB_TOKEN")
 	if !ok {
-		logger.Fatal(ctx, "Не удалось получить токен из env::TLG_TOKEN")
+		logger.Fatal(ctx, "Не удалось получить токен из env::ASB_TOKEN")
 	}
 
 	bot, err := tgbotapi.NewBotAPI(token)
@@ -40,7 +47,7 @@ func main() {
 
 	// TODO: сделать конфинг
 	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	u.Timeout = cfg.TlgTimeout
 
 	updates := bot.GetUpdatesChan(u)
 	receiverCh := make(chan tgbotapi.Update, 1_000_000)
@@ -53,15 +60,14 @@ func main() {
 	s := service.New(logger, r)
 	c := controller.New(logger, s)
 
-	for range 3 { // TODO: cfg
+	for range cfg.ReceiverWorkers { // TODO: cfg
 		go receiverWorker(ctx, logger, c, receiverCh, senderCh)
 	}
 
-	for range 3 { // TODO: cfg
+	for range cfg.SenderWorkers { // TODO: cfg
 		go senderWorker(ctx, logger, bot, c, senderCh)
 	}
 
-	// TODO: переделать на воркеров
 	for update := range updates {
 		receiverCh <- update
 	}

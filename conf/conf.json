@@ -1,0 +1,13 @@
+{
+    "data_path": "./data",
+    "sender_workers": 3,
+    "receiver_workers": 3,
+    "tlg_timeout": 60,
+    "worker_timeout_in_seconds": 15,
+    "user_timeout_in_seconds": 15,
+    "messages": {
+        "welcome": "Добро пожаловать, %userName",
+        "button_text": "Я не бот",
+        "ask": "это ваше первое сообщение, подтвердите, что вы не бот"
+    }
+}
